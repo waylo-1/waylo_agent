@@ -1,0 +1,31 @@
+{
+  "name": "waylo-backend",
+  "version": "1.0.0",
+  "description": "Backend server for Waylo - AI-powered smartphone guide for elderly users",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js",
+    "dev": "node --watch index.js"
+  },
+  "keywords": [
+    "waylo",
+    "elderly",
+    "smartphone",
+    "guide",
+    "accessibility"
+  ],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "@aws-sdk/client-bedrock-runtime": "^3.700.0",
+    "@genkit-ai/google-genai": "^1.41.0",
+    "@genkit-ai/googleai": "^1.28.0",
+    "@supabase/supabase-js": "^2.39.0",
+    "cors": "^2.8.5",
+    "dotenv": "^16.3.1",
+    "express": "^4.18.2",
+    "express-rate-limit": "^7.1.5",
+    "genkit": "^1.41.0",
+    "pg": "^8.22.0"
+  }
+}

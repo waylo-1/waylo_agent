@@ -15,7 +15,10 @@
 
 const specs = require('./promptSpecs');
 
-const PROVIDER = (process.env.AI_PROVIDER || 'bedrock').toLowerCase();
+// This is the Gemini/GenKit hackathon brain — default to Gemini so a Cloud Run
+// deploy never crashes at boot when AI_PROVIDER is unset (bedrock.js throws
+// without AWS keys). Set AI_PROVIDER=bedrock only if you truly want Nova.
+const PROVIDER = (process.env.AI_PROVIDER || 'gemini').toLowerCase();
 
 let raw;
 if (PROVIDER === 'gemini') {

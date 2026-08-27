@@ -5,8 +5,11 @@ FROM node:20-slim
 WORKDIR /app
 
 # Install production dependencies first (better layer caching).
+# Use `npm install` (not `npm ci`): the lockfile is generated on macOS, and
+# npm ci is strict about exact platform/lockfile parity — npm install re-resolves
+# cleanly for the Linux build image.
 COPY package*.json ./
-RUN npm ci --omit=dev
+RUN npm install --omit=dev --no-audit --no-fund
 
 # Copy the rest of the source.
 COPY . .

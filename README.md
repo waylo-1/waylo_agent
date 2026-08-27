@@ -1,47 +1,60 @@
-# Waylo — Agent Backend
+<div align="center">
 
-**Waylo is an AI guide that points a glowing red dot at exactly what to tap next, inside any app, on Android and macOS — so anyone can do things on their phone by doing them themselves.**
+# 🔴 Waylo Agent — the Collaborative Partner brain
 
-This repository is Waylo's **agentic backend**: a [GenKit](https://genkit.dev) agent, powered by **Gemini 3.5**, deployed on **Google Cloud Run**. It decides one on-screen step at a time from the live screen, verifies what happened, and recovers when the screen isn't what it expected.
+**An agentic backend that guides a person through any task on their phone/computer — one step at a time, asking when it's unsure, and remembering what they told it across sessions.**
 
-Built for the **All Things Agentic** hackathon.
+[![Gemini 3.5](https://img.shields.io/badge/Gemini-3.5%20Flash-4285F4?logo=googlegemini&logoColor=white)](https://ai.google.dev)
+[![Genkit](https://img.shields.io/badge/Framework-Genkit-FF6F00)](https://genkit.dev)
+[![Cloud Run](https://img.shields.io/badge/Google%20Cloud-Cloud%20Run-4285F4?logo=googlecloud&logoColor=white)](https://cloud.google.com/run)
+[![Firestore](https://img.shields.io/badge/Google%20Cloud-Firestore-FFA000?logo=firebase&logoColor=white)](https://firebase.google.com/docs/firestore)
+
+**Built for the All Things Agentic Hackathon · Track: The Collaborative Partner**
+
+**Live:** `https://waylo-agent-506434766076.asia-south1.run.app`
+
+</div>
+
+Waylo Agent is the next-generation brain for [Waylo](https://github.com/waylo-1) — the app that puts a talking red dot on the exact thing to tap next, teaching elderly and first-time users to use any app. Instead of writing the whole plan up front and following it blindly, this agent decides **one action at a time**, grounded in the *current* screen and the conversation so far — and it **collaborates**: it asks a clarifying question when the goal is ambiguous, and it **remembers the answer across sessions** so it never starts from zero.
 
 ---
 
-## What makes it an agent
+## What makes it an agent (and a *partner*)
 
-The old design wrote a whole plan up front and followed it blindly. This backend runs a live loop instead:
-
-**perceive → reason → act → verify → adapt**
-
-After each user action, the Android app sends the updated screen to `POST /agent/next`, and the agent returns the **single** next action — or marks the goal `done`, or `recover`s from a surprise (a pop-up, the wrong app, an error).
+A live loop, not a fixed script: **perceive → reason → act → verify → adapt** — plus **ask** and **remember**.
 
 ```mermaid
 flowchart TD
-    A["Android app<br/>reads screen · draws red box"] -->|"goal + live screen"| B
-    subgraph GCP["Google Cloud Run"]
-      B["Node / Express<br/>+ GenKit agent"]
+    A["macOS / Android client<br/>reads the screen · draws the red dot"] -->|"goal + live screen + userId"| B
+    subgraph GCP["Google Cloud"]
+      B["Cloud Run<br/>Node/Express + Genkit agent"]
+      F[("Firestore<br/>persistent memory")]
+      B -->|"load past answers + goals"| F
+      F -->|"remembered context"| B
+      B -->|"save this turn"| F
     end
-    B <-->|"tool-calling loop"| C["Gemini 3.5<br/>(gemini-3.5-flash)"]
-    B -->|"semantic plan cache"| D[("PostgreSQL<br/>+ pgvector")]
-    B -.->|"next single action / done / recover"| A
+    B <-->|"structured-output flow"| C["Gemini 3.5<br/>gemini-3.5-flash"]
+    B -.->|"continue · done · recover · clarify"| A
+    A -.->|"user acts / answers → loop"| B
 ```
 
-## Tech (hackathon requirements)
+After each user action the client calls `POST /agent/next` with the updated screen, and the agent returns the **single** next decision: give the next step (`continue`), finish (`done`), get back on track (`recover`), or **ask a question** (`clarify`). What the user answers is stored in Firestore and reused next time.
 
-| Requirement | How this repo meets it |
+## Hackathon requirements — how this repo meets them
+
+| Requirement | How |
 | --- | --- |
-| **Gemini 3.5 or newer** | `gemini-3.5-flash`, called on every agent turn |
-| **Google Agent Framework** | **GenKit** — `services/agent.js` defines the `nextStep` flow with structured output |
-| **Google Cloud service** | Deployed on **Cloud Run** (see below) |
+| **Gemini 3.5+** | `gemini-3.5-flash`, called on every agent turn |
+| **Google Agent Framework** | **Genkit** — `services/agent.js` defines the `nextStep` flow with structured output |
+| **Google Cloud service** | **Cloud Run** (host) **+ Firestore** (persistent memory) — two GCP services |
 
 ## The agent flow
 
-`services/agent.js` is the brain. It defines a GenKit flow, `nextStep`, whose **structured output** forces Gemini to return exactly the JSON the Android client parses:
+`services/agent.js` is the brain: a Genkit `defineFlow` whose **structured output** forces Gemini to return exactly this decision — no fence-stripping, no chatty text:
 
 ```json
 {
-  "status": "continue | done | recover",
+  "status": "continue | done | recover | clarify",
   "reasoning": "one short sentence",
   "action": {
     "instruction": "spoken step, e.g. \"Tap Notifications in the middle of the screen.\"",
@@ -51,83 +64,73 @@ flowchart TD
     "visualDescription": "...",
     "alternateLabels": ["..."],
     "fallbackHint": "..."
+  },
+  "question": {
+    "prompt": "Would you like to create a new document, or open an existing one?",
+    "options": ["Create a new document", "Open an existing one"]
   }
 }
 ```
+`action` is null when `status` is `done` or `clarify`; `question` is present only when `status` is `clarify`.
+
+## Persistent memory (Firestore)
+
+`services/memory.js` stores, per `userId`, the answers the user has given to clarifying questions and the goals they've pursued. On every `/agent/next`, that memory is loaded and merged in — so **a brand-new session inherits what the user already told the agent, and it never re-asks.** Degrades to stateless if Firestore is absent (auto-enabled on Cloud Run).
 
 ## API
 
 | Endpoint | Purpose |
 | --- | --- |
-| `GET /health` | Liveness check |
-| `POST /agent/next` | **The agent.** Body: `{ goal, appName?, appPackage?, screen?, history? }` → returns the decision above |
+| `POST /agent/next` | **The agent.** `{ goal, appName?, appPackage?, screen?, userId?, history?, answers? }` → the decision above (plus `memoryUsed`) |
+| `GET /` | Liveness |
 | `POST /plan` | Legacy one-shot planner (kept for compatibility) |
-| `POST /vision`, `/vision-fallback` | Vision grounding helpers |
+
+Smoke-test:
+```bash
+curl -s -X POST https://waylo-agent-506434766076.asia-south1.run.app/agent/next \
+  -H 'Content-Type: application/json' \
+  -d '{"goal":"open a document","appName":"Pages","userId":"u1","screen":"Pages is open with a document titled Notes and a New button."}'
+```
 
 ## Run it locally
-
 ```bash
 npm install
-cp .env.example .env      # then fill in the values
-npm start                 # boots on PORT (default 3000)
+AI_PROVIDER=gemini GEMINI_API_KEY=YOUR_KEY node index.js   # http://localhost:8080
 ```
-
-Smoke-test the agent:
-
-```bash
-curl -s -X POST http://localhost:3000/agent/next \
-  -H 'Content-Type: application/json' \
-  -d '{"goal":"turn off notifications","appName":"Settings","screen":"Settings home. Items: Apps, Notifications, Battery, Sound, Display.","history":[{"instruction":"Open Settings","outcome":"Settings opened"}]}'
-```
+Firestore stays off locally unless you set `ENABLE_FIRESTORE=1` (with GCP credentials).
 
 ## Deploy to Google Cloud Run
-
-Prerequisites: a GCP project with billing, and the `gcloud` CLI (`gcloud init`).
-
 ```bash
-# 1. enable the APIs (once)
-gcloud services enable run.googleapis.com cloudbuild.googleapis.com artifactregistry.googleapis.com
-
-# 2. put your secrets in a local env file (NOT committed), e.g. deploy-env.yaml:
-#    AI_PROVIDER: "gemini"
-#    GEMINI_API_KEY: "..."
-#    GEMINI_TEXT_MODEL: "gemini-3.5-flash"
-#    GEMINI_VISION_MODEL: "gemini-3.5-flash"
-#    DATABASE_URL: "postgres://USER:PASSWORD@HOST:5432/DBNAME"
-
-# 3. deploy (builds the Dockerfile on Cloud Build, no local Docker needed)
-gcloud run deploy waylo-backend \
-  --source . --region asia-south1 --allow-unauthenticated \
-  --env-vars-file deploy-env.yaml --memory 512Mi
+gcloud services enable run.googleapis.com cloudbuild.googleapis.com artifactregistry.googleapis.com firestore.googleapis.com
+gcloud firestore databases create --location=asia-south1                       # one-time
+gcloud run deploy waylo-agent --source . --region asia-south1 --allow-unauthenticated --memory 512Mi \
+  --set-env-vars AI_PROVIDER=gemini,GEMINI_TEXT_MODEL=gemini-3.5-flash,GEMINI_VISION_MODEL=gemini-3.5-flash,GEMINI_API_KEY=YOUR_KEY
 ```
+Builds the Dockerfile on Cloud Build (no local Docker). On Cloud Run, Firestore auto-enables via `K_SERVICE` and uses the service account's default credentials.
 
-Cloud Run returns a public `https://…run.app` URL. It injects `PORT`, which `index.js` already reads.
-
-## Environment variables
-
+## Environment
 | Variable | Purpose |
 | --- | --- |
-| `AI_PROVIDER` | `gemini` (this repo runs on Gemini via GenKit) |
-| `GEMINI_API_KEY` | Gemini API key from [AI Studio](https://aistudio.google.com/app/apikey) |
-| `GEMINI_TEXT_MODEL` / `GEMINI_VISION_MODEL` | `gemini-3.5-flash` |
-| `DATABASE_URL` | PostgreSQL (pgvector) connection string for the plan cache |
-| `PORT` | Server port (Cloud Run sets this automatically) |
+| `GEMINI_API_KEY` | Gemini 3.5 key from [AI Studio](https://aistudio.google.com/apikey) — **required** |
+| `AI_PROVIDER` | `gemini` |
+| `GEMINI_TEXT_MODEL` | `gemini-3.5-flash` |
+| `FIRESTORE_COLLECTION` | memory collection (default `waylo_memory`) |
+| `ENABLE_FIRESTORE` | `1` to use Firestore off Cloud Run |
 
-## Repo layout
-
+## Layout
 ```
-index.js            Express server + routes (incl. POST /agent/next)
-services/agent.js   The GenKit agent — the nextStep flow (Gemini 3.5, structured output)
-services/llm.js     Provider abstraction (gemini | bedrock)
-services/           promptSpecs, providers
-routes/             vision, vision-fallback, yolo-detect, failure
-db.js               PostgreSQL pool
-semanticPlanCache*  Embedding-based plan reuse
-Dockerfile          Cloud Run container
+services/agent.js    the Genkit flow (defineFlow) + Gemini 3.5 + decision schema (incl. clarify)
+services/memory.js   Firestore persistent cross-session memory
+index.js             Express app; POST /agent/next
+Dockerfile           Cloud Run container (node:20-slim)
 ```
 
-The Android client lives in a separate repository.
+The macOS and Android clients live in [waylo-1/frontend_systemsettings_overlay](https://github.com/waylo-1/frontend_systemsettings_overlay).
 
-## License
+---
 
-MIT — see [LICENSE](LICENSE).
+<div align="center">
+
+**Part of [Waylo](https://github.com/waylo-1)** · Gemini 3.5 · Genkit · Cloud Run · Firestore
+
+</div>

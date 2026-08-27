@@ -540,19 +540,36 @@ function generateRandomId(length) {
 app.post('/agent/next', async (req, res) => {
   try {
     const { nextStepFlow } = require('./services/agent');
-    const { goal, appName, appPackage, screen, history, answers } = req.body || {};
+    const memory = require('./services/memory');
+    const { goal, appName, appPackage, screen, history, answers, userId } = req.body || {};
     if (!goal || typeof goal !== 'string') {
       return res.status(400).json({ success: false, error: 'goal (string) is required' });
     }
+
+    // PERSISTENT MEMORY: load what this user has told us in PAST sessions and
+    // merge it with anything sent this session, so the agent adapts to the person
+    // and never re-asks something they already answered — even across sessions.
+    const remembered = await memory.loadMemory(userId);
+    const sessionAnswers = Array.isArray(answers) ? answers : [];
+    const seen = new Set();
+    const mergedAnswers = [...remembered.answers, ...sessionAnswers]
+      .filter((a) => a && a.question && a.answer)
+      .filter((a) => { const k = a.question + ' ' + a.answer; if (seen.has(k)) return false; seen.add(k); return true; })
+      .map((a) => ({ question: a.question, answer: a.answer }));
+
     const decision = await nextStepFlow({
       goal,
       appName,
       appPackage,
       screen,
       history: Array.isArray(history) ? history : [],
-      answers: Array.isArray(answers) ? answers : [],
+      answers: mergedAnswers,
     });
-    return res.json({ success: true, ...decision });
+
+    // Persist this turn (this session's answers + the goal) for future sessions.
+    await memory.remember(userId, { goal, answers: sessionAnswers });
+
+    return res.json({ success: true, memoryUsed: remembered.answers.length, ...decision });
   } catch (err) {
     console.error('[agent/next]', err.message);
     return res.status(500).json({ success: false, error: err.message });

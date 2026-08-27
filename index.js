@@ -540,7 +540,7 @@ function generateRandomId(length) {
 app.post('/agent/next', async (req, res) => {
   try {
     const { nextStepFlow } = require('./services/agent');
-    const { goal, appName, appPackage, screen, history } = req.body || {};
+    const { goal, appName, appPackage, screen, history, answers } = req.body || {};
     if (!goal || typeof goal !== 'string') {
       return res.status(400).json({ success: false, error: 'goal (string) is required' });
     }
@@ -550,6 +550,7 @@ app.post('/agent/next', async (req, res) => {
       appPackage,
       screen,
       history: Array.isArray(history) ? history : [],
+      answers: Array.isArray(answers) ? answers : [],
     });
     return res.json({ success: true, ...decision });
   } catch (err) {

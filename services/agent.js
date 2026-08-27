@@ -43,13 +43,24 @@ const ActionSchema = z.object({
   fallbackHint: z.string().describe('what to do if the element is not visible on screen'),
 });
 
+// A clarifying question the agent asks the user when the goal is ambiguous.
+const QuestionSchema = z.object({
+  prompt: z.string().describe(
+    'ONE short question SPOKEN ALOUD to the user, calm and plain, max 16 words. Ask only what you genuinely need to proceed (e.g. "Do you want a new document, or the one already open?").'
+  ),
+  options: z.array(z.string()).describe(
+    '2 to 4 short answer choices the user can pick from (e.g. ["A new document", "The one already open"]). Empty array if the answer is free-form.'
+  ),
+});
+
 // The agent's decision each turn.
 const DecisionSchema = z.object({
-  status: z.enum(['continue', 'done', 'recover']).describe(
-    'continue = give the next step; done = the goal is already complete on this screen; recover = the screen is not what a normal next step expects (pop-up, wrong app, error) so the action is a recovery move.'
+  status: z.enum(['continue', 'done', 'recover', 'clarify']).describe(
+    'continue = give the next step; done = the goal is already complete on this screen; recover = the screen is not what a normal next step expects (pop-up, wrong app, error) so the action is a recovery move; clarify = the goal is genuinely ambiguous and you must ask the user ONE short question before acting.'
   ),
-  reasoning: z.string().describe('ONE short sentence: why this action, or why done, or what went wrong and how this recovers.'),
-  action: ActionSchema.nullable().describe('the single next action; null ONLY when status is "done".'),
+  reasoning: z.string().describe('ONE short sentence: why this action, or why done, or what went wrong and how this recovers, or why you need to ask.'),
+  action: ActionSchema.nullable().describe('the single next action; null when status is "done" or "clarify".'),
+  question: QuestionSchema.nullable().describe('the question to ask the user; populated ONLY when status is "clarify", otherwise null.'),
 });
 
 const SYSTEM = `You are Waylo, a calm, patient guide that helps a person — often an elderly or first-time smartphone user — do things on their OWN phone by pointing at exactly what to tap next.
@@ -62,16 +73,23 @@ Rules:
 - Pick "elementType" from the enum and "screenRegion" as the element's physical position.
 - If the CURRENT screen already shows the goal is achieved, return status "done" with action null.
 - If the CURRENT screen is NOT what a normal next step expects — a pop-up/dialog blocking the way, the wrong app in front, an error, or the user clearly tapped the wrong thing — return status "recover" and make the action the move that gets back on track (dismiss the dialog, go back, reopen the right screen).
+- If the GOAL is genuinely AMBIGUOUS in a way that changes what you would do next — and guessing wrong would send the user down the wrong path — return status "clarify" with a single short spoken "question" and 2 to 4 plain options, and action null. Ask at MOST one question, and only when it truly matters; if a sensible default exists, pick it and "continue" instead. Never ask about something you can already see on the screen, and never re-ask something the user has already answered (see ANSWERS).
 - Otherwise return status "continue" with the next action.
 - Never invent an element that is not plausibly on the described screen. If unsure what is on screen, guide the user to the most likely place to look.
 - Safety: if the next real action is entering a password or confirming a payment/send/delete, still describe that step normally — the app pauses for the user's own confirmation. Never instruct the user to type a password value.`;
 
-function buildPrompt({ goal, appName, screen, history }) {
+function buildPrompt({ goal, appName, screen, history, answers }) {
   const hist = (history && history.length)
     ? history.map((h, i) => `  ${i + 1}. did: "${h.instruction}" → outcome: ${h.outcome || 'unknown'}`).join('\n')
     : '  (nothing yet — this is the first step)';
+  const ans = (answers && answers.length)
+    ? answers.map((a) => `  - you asked: "${a.question}" → user answered: "${a.answer}"`).join('\n')
+    : '  (none yet)';
   return `GOAL: ${goal}
 APP IN FRONT: ${appName || 'unknown'}
+
+ANSWERS the user has already given to your earlier questions (do NOT ask these again):
+${ans}
 
 STEPS SO FAR:
 ${hist}
@@ -95,14 +113,18 @@ const nextStepFlow = ai.defineFlow(
         instruction: z.string(),
         outcome: z.string().optional(),
       })).optional(),
+      answers: z.array(z.object({
+        question: z.string(),
+        answer: z.string(),
+      })).optional(),
     }),
     outputSchema: DecisionSchema,
   },
-  async ({ goal, appName, screen, history }) => {
+  async ({ goal, appName, screen, history, answers }) => {
     const { output } = await ai.generate({
       model: MODEL,
       system: SYSTEM,
-      prompt: buildPrompt({ goal, appName, screen, history }),
+      prompt: buildPrompt({ goal, appName, screen, history, answers }),
       output: { schema: DecisionSchema },
       config: { temperature: 0.2 },
     });
@@ -110,4 +132,4 @@ const nextStepFlow = ai.defineFlow(
   }
 );
 
-module.exports = { ai, nextStepFlow, DecisionSchema, ActionSchema, ELEMENT_TYPES };
+module.exports = { ai, nextStepFlow, DecisionSchema, ActionSchema, QuestionSchema, ELEMENT_TYPES };

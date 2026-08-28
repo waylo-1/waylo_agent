@@ -14,6 +14,9 @@
 
 const { genkit, z } = require('genkit');
 const { googleAI } = require('@genkit-ai/google-genai');
+// Proven desktop planner prompt + parser — reused so the GenKit plan flow
+// produces identical plan quality to the original /plan path.
+const specs = require('./promptSpecs');
 
 // One GenKit instance, reused across requests (warm Cloud Run instances share it).
 const ai = genkit({
@@ -132,4 +135,42 @@ const nextStepFlow = ai.defineFlow(
   }
 );
 
-module.exports = { ai, nextStepFlow, DecisionSchema, ActionSchema, QuestionSchema, ELEMENT_TYPES };
+// ── Full-plan flow (GenKit + Gemini 3.5) ────────────────────────────────────
+// The macOS /plan path runs through THIS so plan generation — the core "brain"
+// — goes through GenKit + Gemini 3.5, satisfying the hackathon requirement,
+// while reusing the proven desktop system prompt + parser for identical plan
+// quality. Returns the same { task, app, steps:[...] } object the client parses.
+const planFlow = ai.defineFlow(
+  {
+    name: 'desktopPlan',
+    inputSchema: z.object({
+      task: z.string(),
+      screenContext: z.string().optional(),
+    }),
+    outputSchema: z.any(), // parseDesktopPlan guarantees the { task, app, steps } shape
+  },
+  async ({ task, screenContext }) => {
+    let prompt = `Task: ${task}`;
+    const ctx = (screenContext || '').trim();
+    if (ctx) {
+      prompt += `
+
+Live screen snapshot (from the user's accessibility tree, captured just now):
+${ctx.slice(0, 2400)}
+
+Ground the plan in this snapshot:
+- If the app needed for the task is already frontmost, do NOT add a step to open it — start from the visible state, and set the plan's "app" field to that frontmost app's exact name.
+- When a visible element in the snapshot matches a step's target, copy its EXACT title into targetLabel (real labels beat guessed ones).
+- If the task needs an app that is NOT in the snapshot, plan its launch normally (Dock/Spotlight).`;
+    }
+    const { text } = await ai.generate({
+      model: MODEL,
+      system: specs.getDesktopSystemPrompt(),
+      prompt,
+      config: { temperature: 0.3, maxOutputTokens: 1500 },
+    });
+    return specs.parseDesktopPlan(text);
+  }
+);
+
+module.exports = { ai, nextStepFlow, planFlow, DecisionSchema, ActionSchema, QuestionSchema, ELEMENT_TYPES };

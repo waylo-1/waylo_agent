@@ -104,49 +104,47 @@ app.post('/plan', planLimiter, async (req, res) => {
     if (platform === 'macos') {
       console.log(`Plan requested (macOS): ${task}`);
 
-      // Semantic cache: a paraphrase of a prior task returns instantly, no Nova call.
-      const cachedPlan = await semanticPlanCache.getPlanFromCache('macos', task);
-      if (cachedPlan) {
-        console.log(`Plan semantic-cache HIT (macOS) for: ${task}`);
-        return res.json({ ...cachedPlan, cached: true });
-      }
-
       // Optional live-screen grounding from the macOS client (AX-tree snapshot).
       const screenContext = typeof req.body.screenContext === 'string'
         ? req.body.screenContext : '';
-      if (screenContext) {
+
+      // Semantic cache (Aurora/pgvector) is OPTIONAL here: this backend may run
+      // without a DB (e.g. Cloud Run). If it's reachable, a paraphrase returns
+      // instantly; if not, we just generate a fresh plan. Grounded plans skip
+      // the cache read (the live screen changes the right answer).
+      if (!screenContext) {
+        try {
+          const cachedPlan = await semanticPlanCache.getPlanFromCache('macos', task);
+          if (cachedPlan) {
+            console.log(`Plan semantic-cache HIT (macOS) for: ${task}`);
+            return res.json({ ...cachedPlan, cached: true });
+          }
+        } catch (cacheErr) {
+          console.warn('Semantic cache unavailable (macOS) — generating fresh:', cacheErr.message);
+        }
+      } else {
         console.log(`Plan grounding (macOS): ${screenContext.length} chars of screen context`);
       }
 
+      // The plan BRAIN: GenKit + Gemini 3.5 (structured desktop plan). Lazy-
+      // required so the server still boots if GenKit isn't configured.
       let plan;
       try {
-        plan = await generateDesktopSteps(task, screenContext);
+        const { planFlow } = require('./services/agent');
+        plan = await planFlow({ task, screenContext });
       } catch (genError) {
-        if (!isQuotaOrThrottleError(genError)) throw genError;
-
-        console.warn(`Plan generation throttled (macOS) for "${task}" — trying a degraded semantic-cache match`);
-        const fallbackPlan = await semanticPlanCache.getPlanFromCache(
-          'macos', task, semanticPlanCache.QUOTA_FALLBACK_SIMILARITY_THRESHOLD
-        );
-        if (fallbackPlan) {
-          console.log(`Plan quota-fallback HIT (macOS, degraded similarity) for: ${task}`);
-          return res.json({ ...fallbackPlan, cached: true, degraded: true });
-        }
-
-        console.error('Plan generation throttled (macOS) and no cache fallback available:', genError.message);
-        return res.status(429).json({
+        console.error('Plan generation failed (macOS, GenKit):', genError.message);
+        return res.status(500).json({
           success: false,
-          error: 'AI service is temporarily busy. Please try again in a moment.',
-          code: 'quota_exceeded',
+          error: 'Failed to generate plan',
+          details: genError.message,
         });
       }
 
-      console.log(`Bedrock desktop response received, ${plan.steps?.length || 0} steps parsed`);
+      console.log(`GenKit desktop plan: ${plan.steps?.length || 0} steps`);
 
-      // Store for next time (fire-and-forget; only cache non-empty plans).
-      // Grounded plans are NOT cached: a plan that (correctly) skips opening
-      // the app because it was already frontmost would be wrong as the
-      // general cached answer for this task from a cold start.
+      // Store for next time (fire-and-forget; only non-empty, non-grounded plans).
+      // Swallows a missing/failed DB — caching is best-effort.
       if (plan.steps && plan.steps.length > 0 && !screenContext) {
         semanticPlanCache.storePlanInCache('macos', task, plan).then(() => {}, () => {});
       }

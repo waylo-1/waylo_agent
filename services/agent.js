@@ -167,7 +167,10 @@ Ground the plan in this snapshot:
       model: MODEL,
       system: specs.getDesktopSystemPrompt(),
       prompt,
-      config: { temperature: 0.3, maxOutputTokens: 1500 },
+      // gemini-3.5-flash is a THINKING model — internal reasoning consumes the
+      // output budget, so a tight limit truncates the plan JSON mid-string.
+      // 8192 leaves ample room for thinking + the full plan.
+      config: { temperature: 0.3, maxOutputTokens: 8192 },
     });
     return specs.parseDesktopPlan(text);
   }

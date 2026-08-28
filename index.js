@@ -107,6 +107,10 @@ app.post('/plan', planLimiter, async (req, res) => {
       // Optional live-screen grounding from the macOS client (AX-tree snapshot).
       const screenContext = typeof req.body.screenContext === 'string'
         ? req.body.screenContext : '';
+      // Session memory (follow-up context): what the user already did this
+      // session, so a follow-up plan builds on it instead of starting over.
+      const sessionContext = typeof req.body.sessionContext === 'string'
+        ? req.body.sessionContext : '';
 
       // Semantic cache (Aurora/pgvector) is OPTIONAL here: this backend may run
       // without a DB (e.g. Cloud Run). If it's reachable, a paraphrase returns
@@ -131,7 +135,7 @@ app.post('/plan', planLimiter, async (req, res) => {
       let plan;
       try {
         const { planFlow } = require('./services/agent');
-        plan = await planFlow({ task, screenContext });
+        plan = await planFlow({ task, screenContext, sessionContext });
       } catch (genError) {
         console.error('Plan generation failed (macOS, GenKit):', genError.message);
         return res.status(500).json({

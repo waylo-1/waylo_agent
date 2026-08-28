@@ -146,11 +146,26 @@ const planFlow = ai.defineFlow(
     inputSchema: z.object({
       task: z.string(),
       screenContext: z.string().optional(),
+      sessionContext: z.string().optional(), // memory: what the user already did this session
     }),
     outputSchema: z.any(), // parseDesktopPlan guarantees the { task, app, steps } shape
   },
-  async ({ task, screenContext }) => {
+  async ({ task, screenContext, sessionContext }) => {
     let prompt = `Task: ${task}`;
+
+    // SESSION MEMORY: earlier tasks the user completed this session. Lets a
+    // follow-up ("now make it italic") build on prior state instead of starting
+    // over — the point of the follow-up loop.
+    const mem = (sessionContext || '').trim();
+    if (mem) {
+      prompt += `
+
+Session memory (things the user ALREADY did in this session — this new request may be a FOLLOW-UP that builds on them):
+${mem.slice(0, 1400)}
+
+If this request is a follow-up, do NOT repeat already-completed steps (e.g. don't re-open the app or re-create the document); assume that state and continue from it.`;
+    }
+
     const ctx = (screenContext || '').trim();
     if (ctx) {
       prompt += `

@@ -17,7 +17,7 @@
 
 ![Waylo Agent — architecture](docs/architecture.png)
 
-Waylo Agent is the next-generation brain for [Waylo](https://github.com/waylo-1) — the app that puts a talking red dot on the exact thing to tap next, teaching elderly and first-time users to use any app. Instead of writing the whole plan up front and following it blindly, this agent decides **one action at a time**, grounded in the *current* screen and the conversation so far — and it **collaborates**: it asks a clarifying question when the goal is ambiguous, and it **remembers the answer across sessions** so it never starts from zero.
+Waylo Agent is the brain for [Waylo](https://github.com/waylo-1) — the app that puts a talking red dot on the exact thing to tap next, teaching elderly and first-time users to use any app. Instead of a fixed script, it **plans each task with Gemini 3.5, grounded in the live screen**, and guides the user one dot at a time — and it **collaborates**: it asks a clarifying question when the goal is ambiguous, it **never dead-ends** (when a task finishes it asks for a follow-up and carries what you just did into the next plan), and it **remembers across sessions** so it never starts from zero.
 
 ---
 
@@ -47,28 +47,37 @@ A live loop, not a fixed script: **perceive → reason → act → verify → ad
 
 ```mermaid
 flowchart TD
-    A["macOS / Android client<br/>reads the screen · draws the red dot"] -->|"goal + live screen + userId"| B
+    A["macOS / Android client<br/>reads the screen · draws the red dot"] -->|"task + live screen + session memory"| B
     subgraph GCP["Google Cloud"]
-      B["Cloud Run<br/>Node/Express + Genkit agent"]
+      B["Cloud Run<br/>Node/Express + Genkit"]
       F[("Firestore<br/>persistent memory")]
       B -->|"load past answers + goals"| F
       F -->|"remembered context"| B
       B -->|"save this turn"| F
     end
     B <-->|"structured-output flow"| C["Gemini 3.5<br/>gemini-3.5-flash"]
-    B -.->|"continue · done · recover · clarify"| A
-    A -.->|"user acts / answers → loop"| B
+    B -.->|"a full plan · or a clarify question"| A
+    A -.->|"user acts / answers → follow-up"| B
 ```
 
-After each user action the client calls `POST /agent/next` with the updated screen, and the agent returns the **single** next decision: give the next step (`continue`), finish (`done`), get back on track (`recover`), or **ask a question** (`clarify`). What the user answers is stored in Firestore and reused next time.
+The desktop client sends `POST /plan` with the task, a live screen snapshot, and the session's memory; **Genkit + Gemini 3.5** return a full step-by-step plan — or a **clarify** question when the goal is genuinely ambiguous. The guide never dead-ends: after a task it asks for a follow-up, and prior tasks are carried into the next plan as context. A per-turn variant, `POST /agent/next`, returns one decision at a time (`continue / done / recover / clarify`) and persists answers to **Firestore**, so a new session inherits what the user already told it.
 
 ## Hackathon requirements — how this repo meets them
 
 | Requirement | How |
 | --- | --- |
-| **Gemini 3.5+** | `gemini-3.5-flash`, called on every agent turn |
-| **Google Agent Framework** | **Genkit** — `services/agent.js` defines the `nextStep` flow with structured output |
-| **Google Cloud service** | **Cloud Run** (host) **+ Firestore** (persistent memory) — two GCP services |
+| **Gemini 3.5+** | `gemini-3.5-flash` via the **Gemini API** — powers every plan and every agent decision |
+| **Google Agent Framework** | **Genkit** — `services/agent.js` defines two flows with **structured output**: `planFlow` (`/plan`, a full step-by-step plan) and `nextStepFlow` (`/agent/next`, one decision at a time) |
+| **Google Cloud service** | **Cloud Run** (hosts the container) **+ Firestore** (persistent memory) — two Google Cloud services |
+
+### How the Google Cloud pieces fit together
+
+- **Cloud Run** runs the whole agent as a serverless container (Node/Express + Genkit). It scales to zero when idle, spins up on demand, and holds up under real traffic — the live service is the URL above.
+- **Genkit** is the agent framework. Each request is a Genkit flow (`ai.defineFlow`) that calls **Gemini 3.5** with a Zod **output schema**, so the model is forced to return exactly the JSON the client needs — no brittle text-parsing.
+- **Gemini 3.5** (`gemini-3.5-flash`, Gemini API) is the reasoning: it reads the live screen, writes the plan, decides `continue / done / recover / clarify`, and grounds hard cases in the pixels.
+- **Firestore** is the persistent, per-user memory — clarify answers and goals are saved and loaded back, so the agent never asks the same thing twice across sessions.
+
+**Request path:** client → `POST /plan` with `{ task, live screen, session memory }` → **Genkit + Gemini 3.5** on **Cloud Run** return a structured plan (or a clarifying question) → the client draws the red dot; persistent answers load/save from **Firestore**.
 
 ## The agent flow
 
@@ -97,29 +106,33 @@ After each user action the client calls `POST /agent/next` with the updated scre
 
 ## Persistent memory (Firestore)
 
-`services/memory.js` stores, per `userId`, the answers the user has given to clarifying questions and the goals they've pursued. On every `/agent/next`, that memory is loaded and merged in — so **a brand-new session inherits what the user already told the agent, and it never re-asks.** Degrades to stateless if Firestore is absent (auto-enabled on Cloud Run).
+Memory works at two levels:
+
+- **Within a session** — the desktop follow-up loop carries the tasks already done into the next `/plan` call as `sessionContext`, so a follow-up like *"now make it bigger"* builds on what you just did instead of starting over.
+- **Across sessions** — `services/memory.js` stores, per `userId`, the answers given to clarifying questions and the goals pursued in **Firestore**. On every `/agent/next` that memory is loaded and merged in, so **a brand-new session inherits what the user already told the agent and never re-asks.** Degrades to stateless if Firestore is absent (auto-enabled on Cloud Run via `K_SERVICE`).
 
 ## API
 
 | Endpoint | Purpose |
 | --- | --- |
-| `POST /agent/next` | **The agent.** `{ goal, appName?, appPackage?, screen?, userId?, history?, answers? }` → the decision above (plus `memoryUsed`) |
-| `GET /` | Liveness |
-| `POST /plan` | Legacy one-shot planner (kept for compatibility) |
+| `POST /plan` | **The desktop planner (primary).** `{ task, platform:"macos", screenContext?, sessionContext? }` → a full `{ task, app, steps[] }` plan **or** `{ clarify: { prompt, options } }` — via Genkit `planFlow` + Gemini 3.5. This is what the macOS client calls. |
+| `POST /agent/next` | **Per-turn agent.** `{ goal, appName?, screen?, userId?, history?, answers? }` → one decision (`continue / done / recover / clarify`, plus `memoryUsed`) via `nextStepFlow`, with Firestore memory. |
+| `GET /health` | Liveness |
 
-Smoke-test:
+Smoke-test the primary planner (Genkit + Gemini 3.5):
 ```bash
-curl -s -X POST https://waylo-agent-506434766076.asia-south1.run.app/agent/next \
+curl -s -X POST https://waylo-agent-506434766076.asia-south1.run.app/plan \
   -H 'Content-Type: application/json' \
-  -d '{"goal":"open a document","appName":"Pages","userId":"u1","screen":"Pages is open with a document titled Notes and a New button."}'
+  -d '{"task":"make the text bold in Pages","platform":"macos"}'
 ```
 
 ## Run it locally
 ```bash
 npm install
-AI_PROVIDER=gemini GEMINI_API_KEY=YOUR_KEY node index.js   # http://localhost:8080
+AI_PROVIDER=gemini GEMINI_API_KEY=YOUR_KEY node index.js   # http://localhost:3000
+# then: curl -s localhost:3000/health
 ```
-Firestore stays off locally unless you set `ENABLE_FIRESTORE=1` (with GCP credentials).
+`PORT` overrides the port (Cloud Run sets it to 8080). Firestore stays off locally unless you set `ENABLE_FIRESTORE=1` (with GCP credentials); the `/plan` planner works without it.
 
 ## Deploy to Google Cloud Run
 ```bash
@@ -141,13 +154,15 @@ Builds the Dockerfile on Cloud Build (no local Docker). On Cloud Run, Firestore 
 
 ## Layout
 ```
-services/agent.js    the Genkit flow (defineFlow) + Gemini 3.5 + decision schema (incl. clarify)
-services/memory.js   Firestore persistent cross-session memory
-index.js             Express app; POST /agent/next
-Dockerfile           Cloud Run container (node:20-slim)
+services/agent.js       Genkit flows — planFlow (/plan) + nextStepFlow (/agent/next) + Gemini 3.5 + schemas (incl. clarify)
+services/promptSpecs.js  the proven desktop planner prompt + parser (reused by planFlow)
+services/memory.js       Firestore persistent cross-session memory
+demoPlans.js             locked, curated plans for scripted demo tasks
+index.js                 Express app — POST /plan, POST /agent/next, GET /health
+Dockerfile               Cloud Run container (node:20-slim)
 ```
 
-The macOS and Android clients live in [waylo-1/frontend_systemsettings_overlay](https://github.com/waylo-1/frontend_systemsettings_overlay).
+The macOS and Android clients (this hackathon's agent wiring) live in [waylo-1/waylo-agent-client](https://github.com/waylo-1/waylo-agent-client).
 
 ---
 

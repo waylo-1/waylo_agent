@@ -17,7 +17,11 @@ const DEMO_PLANS = [
     match: (t) => /\bnew project\b/.test(t) && /\b(create|make|start|add|how)\b/.test(t),
     plan: {
       task: 'Create a new project',
-      app: 'Safari', // already frontmost (a follow-up); the client won't reopen it
+      // Empty app = run in whatever's already frontmost (the browser the user
+      // made the API key in) — never switch browsers. A follow-up is always in
+      // an already-open app, and forcing e.g. Safari caused a flicker when the
+      // user was in Chrome.
+      app: '',
       steps: [
         {
           index: 1,

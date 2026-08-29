@@ -15,6 +15,8 @@
 
 </div>
 
+![Waylo Agent — architecture](docs/architecture.png)
+
 Waylo Agent is the next-generation brain for [Waylo](https://github.com/waylo-1) — the app that puts a talking red dot on the exact thing to tap next, teaching elderly and first-time users to use any app. Instead of writing the whole plan up front and following it blindly, this agent decides **one action at a time**, grounded in the *current* screen and the conversation so far — and it **collaborates**: it asks a clarifying question when the goal is ambiguous, and it **remembers the answer across sessions** so it never starts from zero.
 
 ---

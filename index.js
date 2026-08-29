@@ -104,6 +104,14 @@ app.post('/plan', planLimiter, async (req, res) => {
     if (platform === 'macos') {
       console.log(`Plan requested (macOS): ${task}`);
 
+      // Locked demo plan (hackathon video): return curated steps verbatim,
+      // bypassing the LLM, so a scripted flow is identical on every take.
+      const demoPlan = require('./demoPlans').matchDemoPlan(task);
+      if (demoPlan) {
+        console.log(`Plan DEMO override (macOS): ${task}`);
+        return res.json(demoPlan);
+      }
+
       // Optional live-screen grounding from the macOS client (AX-tree snapshot).
       const screenContext = typeof req.body.screenContext === 'string'
         ? req.body.screenContext : '';

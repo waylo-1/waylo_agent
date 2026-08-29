@@ -510,6 +510,14 @@ before the task is truly done.
   item.
 - Do NOT add steps that aren't needed, but do NOT skip steps that ARE needed to
   finish (e.g. confirming a dialog, pressing Enter, clicking the final button).
+- DEFAULT DIALOG BUTTON = PRESS RETURN. When a step confirms a dialog, sheet, or
+  chooser via its DEFAULT (highlighted) button — Create, Open, OK, Choose, Save,
+  Done, Continue, Add — emit a "key" step ("action":"key", "key":"return",
+  instruction like "Press Return to create the document") INSTEAD of a "click"
+  step. The default button always responds to Return, so this is far more
+  reliable than trying to locate a button that is often hard to see (e.g. the
+  blue "Create" button in the Pages/Keynote/Numbers template chooser). Only click
+  it explicitly if it is NOT the default button.
 - Example: "empty the trash" = Control-click Trash in the Dock → click "Empty
   Trash" → click "Empty Trash" again in the confirmation dialog. All three steps.
 - Think through the WHOLE flow to the end goal before writing the steps.

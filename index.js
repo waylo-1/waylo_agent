@@ -145,6 +145,13 @@ app.post('/plan', planLimiter, async (req, res) => {
         });
       }
 
+      // The agent asked a clarifying question instead of planning — pass it
+      // straight to the client so it can ask the user (Collaborative Partner).
+      if (plan && plan.clarify) {
+        console.log(`Plan CLARIFY (macOS): ${plan.clarify.prompt}`);
+        return res.json({ clarify: plan.clarify });
+      }
+
       console.log(`GenKit desktop plan: ${plan.steps?.length || 0} steps`);
 
       // Store for next time (fire-and-forget; only non-empty, non-grounded plans).

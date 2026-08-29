@@ -135,6 +135,17 @@ const nextStepFlow = ai.defineFlow(
   }
 );
 
+// Pull the first JSON object out of a model response (tolerates ```json fences
+// and leading/trailing prose). Returns the parsed object or null.
+function extractJSON(text) {
+  let t = (text || '').trim();
+  const fence = t.match(/```(?:json)?\s*([\s\S]*?)```/i);
+  if (fence) t = fence[1].trim();
+  const a = t.indexOf('{'), b = t.lastIndexOf('}');
+  if (a >= 0 && b > a) t = t.slice(a, b + 1);
+  try { return JSON.parse(t); } catch { return null; }
+}
+
 // ── Full-plan flow (GenKit + Gemini 3.5) ────────────────────────────────────
 // The macOS /plan path runs through THIS so plan generation — the core "brain"
 // — goes through GenKit + Gemini 3.5, satisfying the hackathon requirement,
@@ -187,6 +198,20 @@ Ground the plan in this snapshot:
       // 8192 leaves ample room for thinking + the full plan.
       config: { temperature: 0.3, maxOutputTokens: 8192 },
     });
+
+    // The model may ask a clarifying question INSTEAD of a plan when the request
+    // is genuinely ambiguous — return that so the client can ask the user.
+    const obj = extractJSON(text);
+    if (obj && obj.clarify && typeof obj.clarify.prompt === 'string' && obj.clarify.prompt.trim()) {
+      return {
+        clarify: {
+          prompt: obj.clarify.prompt.trim(),
+          options: Array.isArray(obj.clarify.options)
+            ? obj.clarify.options.map(String).filter(Boolean).slice(0, 4)
+            : [],
+        },
+      };
+    }
     return specs.parseDesktopPlan(text);
   }
 );

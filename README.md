@@ -19,6 +19,26 @@ Waylo Agent is the next-generation brain for [Waylo](https://github.com/waylo-1)
 
 ---
 
+## What was built for this hackathon (disclosure)
+
+Per the **New Projects Only** rule, here is the exact boundary of what was created during the Submission Period (Aug 3–31, 2026):
+
+**Built during the Submission Period — this repo (`waylo_agent`) and the client's `agent-cloud-demo` branch:**
+- The entire **agent backend**: the **Genkit + Gemini 3.5** desktop planner (`planFlow`, `services/agent.js`), the **clarifying-question** flow, and the per-turn agent (`/agent/next`).
+- The **orchestration**: the follow-up session loop that never dead-ends, clarify handling, and session memory that carries prior tasks into each follow-up plan.
+- **Firestore** persistence (`services/memory.js`) and the **Google Cloud Run** deployment.
+- The macOS client's **agent wiring** — Follow-up mode, the clarify UI, Right-⌘ voice / typed feedback capture — on the `agent-cloud-demo` branch.
+
+**Pre-existing components carried in (built before Aug 3, 2026), named as such:**
+- The macOS / Android **client shell** (window, notch panel, the talking red-dot overlay).
+- The **on-device detection pipeline** (L0 Accessibility, L1 OCR, L2 / L2.5 YOLO) that turns a planned step into exact pixel coordinates.
+
+**Standard tools / frameworks:** Genkit, Google GenAI SDK, Express, SwiftUI / AppKit.
+
+The new agent layer lives in this **dedicated repository, created within the Submission Period**, so its commit history reflects the timeline. The pre-existing detection pipeline and learned-icon store remain on the original backend; what this hackathon added is the agentic brain, memory, and deployment above.
+
+---
+
 ## What makes it an agent (and a *partner*)
 
 A live loop, not a fixed script: **perceive → reason → act → verify → adapt** — plus **ask** and **remember**.
